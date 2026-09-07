@@ -1,4 +1,3 @@
-Yes — here is **Task 1 to Task 4 in one continuous README block**, cleaned up so you can copy it directly without the extra empty code fences.
 
 ````markdown
 # Forward Deployed Engineer Assessment
