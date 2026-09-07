@@ -1,8 +1,14 @@
 import asyncio
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from task4_model_router import db
+from task4_model_router.router import app
+
+
+client = TestClient(app)
 
 
 @pytest.mark.asyncio
@@ -105,3 +111,179 @@ async def test_concurrent_requests_respect_limit(tmp_path, monkeypatch):
     )
 
     assert allowed_count == 1
+
+
+def test_primary_success(monkeypatch):
+    async def fake_check(*args, **kwargs):
+        return True, 100
+
+    class Response:
+        status_code = 200
+        is_success = True
+
+        def json(self):
+            return {
+                "provider": "primary",
+                "text": "ok",
+            }
+
+    async def fake_provider(*args, **kwargs):
+        return Response()
+
+    monkeypatch.setattr(
+        "task4_model_router.router.check_and_record_usage",
+        fake_check,
+    )
+
+    monkeypatch.setattr(
+        "task4_model_router.router.call_provider",
+        fake_provider,
+    )
+
+    response = client.post(
+        "/complete",
+        headers={"X-API-Key": "tenant-test"},
+        json={
+            "prompt": "hello",
+            "max_tokens": 100,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "primary"
+
+
+def test_primary_429_uses_backup(monkeypatch):
+    async def fake_check(*args, **kwargs):
+        return True, 100
+
+    calls = 0
+
+    class PrimaryResponse:
+        status_code = 429
+        is_success = False
+
+    class BackupResponse:
+        status_code = 200
+        is_success = True
+
+        def json(self):
+            return {
+                "provider": "backup",
+                "text": "fallback",
+            }
+
+    async def fake_provider(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+
+        if calls == 1:
+            return PrimaryResponse()
+
+        return BackupResponse()
+
+    monkeypatch.setattr(
+        "task4_model_router.router.check_and_record_usage",
+        fake_check,
+    )
+
+    monkeypatch.setattr(
+        "task4_model_router.router.call_provider",
+        fake_provider,
+    )
+
+    response = client.post(
+        "/complete",
+        headers={"X-API-Key": "tenant-test"},
+        json={
+            "prompt": "hello",
+            "max_tokens": 100,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "backup"
+
+
+def test_primary_timeout_uses_backup(monkeypatch):
+    async def fake_check(*args, **kwargs):
+        return True, 100
+
+    calls = 0
+
+    class BackupResponse:
+        status_code = 200
+        is_success = True
+
+        def json(self):
+            return {
+                "provider": "backup",
+                "text": "timeout fallback",
+            }
+
+    async def fake_provider(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+
+        if calls == 1:
+            raise httpx.ReadTimeout("primary timed out")
+
+        return BackupResponse()
+
+    monkeypatch.setattr(
+        "task4_model_router.router.check_and_record_usage",
+        fake_check,
+    )
+
+    monkeypatch.setattr(
+        "task4_model_router.router.call_provider",
+        fake_provider,
+    )
+
+    response = client.post(
+        "/complete",
+        headers={"X-API-Key": "tenant-test"},
+        json={
+            "prompt": "hello",
+            "max_tokens": 100,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "backup"
+
+
+def test_provider_failure_returns_safe_error(monkeypatch):
+    async def fake_check(*args, **kwargs):
+        return True, 100
+
+    async def fake_provider(*args, **kwargs):
+        raise httpx.ConnectError(
+            "internal provider connection details"
+        )
+
+    monkeypatch.setattr(
+        "task4_model_router.router.check_and_record_usage",
+        fake_check,
+    )
+
+    monkeypatch.setattr(
+        "task4_model_router.router.call_provider",
+        fake_provider,
+    )
+
+    response = client.post(
+        "/complete",
+        headers={"X-API-Key": "tenant-test"},
+        json={
+            "prompt": "hello",
+            "max_tokens": 100,
+        },
+    )
+
+    body = response.json()
+
+    assert response.status_code == 502
+    assert body["error"]["code"] == "UPSTREAM_UNAVAILABLE"
+    assert "request_id" in body["error"]
+    assert "internal provider connection details" not in str(body)
