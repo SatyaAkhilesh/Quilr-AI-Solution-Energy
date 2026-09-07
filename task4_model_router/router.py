@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 
 import httpx
@@ -38,6 +37,12 @@ def gateway_error(
             }
         },
     )
+
+
+def estimate_tokens(text: str) -> int:
+    # Lightweight estimate for this assessment.
+    # A production gateway would use the model's tokenizer.
+    return max(1, len(text) // 4)
 
 
 async def call_provider(
@@ -97,7 +102,8 @@ async def complete(
             request_id=request_id,
         )
 
-    estimated_tokens = max_tokens
+    prompt_tokens = estimate_tokens(prompt)
+    estimated_tokens = prompt_tokens + max_tokens
 
     allowed, current_usage = await check_and_record_usage(
         x_api_key,
@@ -125,11 +131,19 @@ async def complete(
         )
 
         if primary_response.status_code == 429:
-            backup_response = await call_provider(
-                BACKUP_URL,
-                upstream_payload,
-                timeout_seconds=3.0,
-            )
+            try:
+                backup_response = await call_provider(
+                    BACKUP_URL,
+                    upstream_payload,
+                    timeout_seconds=3.0,
+                )
+            except httpx.RequestError:
+                return gateway_error(
+                    code="UPSTREAM_UNAVAILABLE",
+                    message="Model service is temporarily unavailable",
+                    status_code=502,
+                    request_id=request_id,
+                )
 
             if backup_response.is_success:
                 return backup_response.json()
