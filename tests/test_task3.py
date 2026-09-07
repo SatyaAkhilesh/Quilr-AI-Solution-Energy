@@ -82,3 +82,18 @@ async def test_card_split_across_chunks():
 
     assert "4111 1111 1111 1111" not in output
     assert "[REDACTED]" in output
+
+
+@pytest.mark.asyncio
+async def test_long_email_split_across_chunks():
+    async def upstream():
+        yield "Contact very.long.customer.name.with.tags+sales@"
+        yield "example-enterprise-domain.com for details."
+
+    output = ""
+
+    async for chunk in redact_stream(upstream()):
+        output += chunk
+
+    assert "very.long.customer.name.with.tags+sales@" not in output
+    assert "[REDACTED]" in output

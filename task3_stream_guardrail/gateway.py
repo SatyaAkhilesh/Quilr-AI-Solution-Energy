@@ -22,7 +22,7 @@ CARD_PATTERN = re.compile(
 )
 
 
-BUFFER_SIZE = 32
+BUFFER_SIZE = 128
 
 def redact_pii(text: str) -> str:
     text = EMAIL_PATTERN.sub("[REDACTED]", text)
